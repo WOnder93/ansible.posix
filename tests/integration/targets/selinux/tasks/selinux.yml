@@ -20,6 +20,11 @@
 # ##############################################################################
 # Test changing the state, which requires a reboot
 
+- name: TEST 1 | Make sure grubby is present
+  package:
+    name: grubby
+    state: present
+
 - name: TEST 1 | Get current SELinux config file contents
   set_fact:
     selinux_config_original: "{{ lookup('file', '/etc/sysconfig/selinux').split('\n') }}"
@@ -72,6 +77,15 @@
     var: ansible_selinux
     verbosity: 1
 
+- name: Check kernel command-line arguments
+  ansible.builtin.command: grubby --info=DEFAULT
+  register: _grubby_test1
+
+- name: TEST 1 | Assert that kernel cmdline contains selinux=0
+  assert:
+    that:
+      - "' selinux=0' in _grubby_test1.stdout"
+
 - name: TEST 1 | Disable SELinux again
   selinux:
     state: disabled
@@ -108,6 +122,15 @@
   selinux:
     state: enforcing
     policy: targeted
+
+- name: Check kernel command-line arguments
+  ansible.builtin.command: grubby --info=DEFAULT
+  register: _grubby_test2
+
+- name: TEST 1 | Assert that kernel cmdline doesn't contain selinux=0
+  assert:
+    that:
+      - "' selinux=0' not in _grubby_test2.stdout"
 
 
 # Second Test
