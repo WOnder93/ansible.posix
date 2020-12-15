@@ -119,6 +119,30 @@ def get_config_policy(configfile):
             return line.split('=')[1].strip()
 
 
+def get_kernel_enabled(module):
+    rc, stdout, stderr = module.run_command(['grubby', '--info=ALL'])
+    if rc != 0:
+        module.warn("'grubby' command failed - kernel boot configuration won't be updated")
+        return None
+
+    all_enabled = True
+    all_disabled = True
+    for line in stdout.split('\n'):
+        match = re.match('^args="(.*)"$', line)
+        if match is None:
+            continue
+        args = match.group(1).split(' ')
+        if 'selinux=0' in args:
+            all_enabled = False
+        else:
+            all_disabled = False
+    if all_disabled == all_enabled:
+        module.warn("Kernel SELinux configuration inconsistent - "
+                    "kernel boot configuration won't be updated")
+        return None
+    return all_enabled
+
+
 # setter subroutines
 def set_config_state(module, state, configfile):
     # SELINUX=permissive
@@ -151,6 +175,17 @@ def set_state(module, state):
     else:
         msg = 'trying to set invalid runtime state %s' % state
         module.fail_json(msg=msg)
+
+
+def set_kernel_enabled(module, value):
+    rc, stdout, stderr = module.run_command(['grubby', '--update-kernel=ALL',
+                                             '--remove-args' if value else '--args',
+                                             'selinux=0'])
+    if rc != 0:
+        if value:
+            module.fail_json(msg='unable to remove selinux=0 from kernel config')
+        else:
+            module.fail_json(msg='unable to add selinux=0 to kernel config')
 
 
 def set_config_policy(module, policy, configfile):
@@ -199,6 +234,7 @@ def main():
     runtime_enabled = selinux.is_selinux_enabled()
     runtime_policy = selinux.selinux_getpolicytype()[1]
     runtime_state = 'disabled'
+    kernel_enabled = None
     reboot_required = False
 
     if runtime_enabled:
@@ -215,6 +251,7 @@ def main():
 
     config_policy = get_config_policy(configfile)
     config_state = get_config_state(configfile)
+    kernel_enabled = get_kernel_enabled(module)
 
     # check to see if policy is set if state is not 'disabled'
     if state != 'disabled':
@@ -267,6 +304,19 @@ def main():
         if not module.check_mode:
             set_config_state(module, state, configfile)
         msgs.append("Config SELinux state changed from '%s' to '%s'" % (config_state, state))
+        changed = True
+
+    requested_kernel_enabled = state in ('enforcing', 'permissive')
+    # Update kernel enabled/disabled config only when setting is consistent
+    # across all kernels AND the requested state differs from the current state
+    if kernel_enabled is not None and kernel_enabled != requested_kernel_enabled:
+        if not module.check_mode:
+            set_kernel_enabled(module, requested_kernel_enabled)
+        if requested_kernel_enabled:
+            states = ('disabled', 'enabled')
+        else:
+            states = ('enabled', 'disabled')
+        msgs.append("Kernel SELinux state changed from '%s' to '%s'" % states)
         changed = True
 
     module.exit_json(changed=changed, msg=', '.join(msgs), configfile=configfile, policy=policy, state=state, reboot_required=reboot_required)

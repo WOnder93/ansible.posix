@@ -1,0 +1,2 @@
+minor_changes:
+- update kernel boot params when disabling/re-enabling SELinux
