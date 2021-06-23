@@ -97,6 +97,7 @@ except ImportError:
     HAS_SELINUX = False
 
 from ansible.module_utils.basic import AnsibleModule, missing_required_lib
+from ansible.module_utils.common.process import get_bin_path
 from ansible.module_utils.facts.utils import get_file_lines
 
 
@@ -119,8 +120,12 @@ def get_config_policy(configfile):
             return line.split('=')[1].strip()
 
 
-def get_kernel_enabled(module):
-    rc, stdout, stderr = module.run_command(['grubby', '--info=ALL'])
+def get_kernel_enabled(module, grubby_bin):
+    if grubby_bin is None:
+        module.warn("'grubby' command not found on host - kernel boot configuration won't be updated")
+        return None
+
+    rc, stdout, stderr = module.run_command([grubby_bin, '--info=ALL'])
     if rc != 0:
         module.warn("'grubby' command failed - kernel boot configuration won't be updated")
         return None
@@ -177,8 +182,8 @@ def set_state(module, state):
         module.fail_json(msg=msg)
 
 
-def set_kernel_enabled(module, value):
-    rc, stdout, stderr = module.run_command(['grubby', '--update-kernel=ALL',
+def set_kernel_enabled(module, grubby_bin, value):
+    rc, stdout, stderr = module.run_command([grubby_bin, '--update-kernel=ALL',
                                              '--remove-args' if value else '--args',
                                              'selinux=0'])
     if rc != 0:
@@ -236,6 +241,10 @@ def main():
     runtime_state = 'disabled'
     kernel_enabled = None
     reboot_required = False
+    try:
+        grubby_bin = get_bin_path('grubby')
+    except ValueError:
+        grubby_bin = None
 
     if runtime_enabled:
         # enabled means 'enforcing' or 'permissive'
@@ -251,7 +260,7 @@ def main():
 
     config_policy = get_config_policy(configfile)
     config_state = get_config_state(configfile)
-    kernel_enabled = get_kernel_enabled(module)
+    kernel_enabled = get_kernel_enabled(module, grubby_bin)
 
     # check to see if policy is set if state is not 'disabled'
     if state != 'disabled':
@@ -311,7 +320,7 @@ def main():
     # across all kernels AND the requested state differs from the current state
     if kernel_enabled is not None and kernel_enabled != requested_kernel_enabled:
         if not module.check_mode:
-            set_kernel_enabled(module, requested_kernel_enabled)
+            set_kernel_enabled(module, grubby_bin, requested_kernel_enabled)
         if requested_kernel_enabled:
             states = ('disabled', 'enabled')
         else:
